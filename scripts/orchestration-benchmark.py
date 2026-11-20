@@ -23,6 +23,23 @@ CASES = {
     'Parallel workers': ('^2 !2', 'In a single parallel batch, ask one worker for exactly BLUE and another for exactly SEVEN.', ('BLUE', 'SEVEN'), ('BLUE', 'SEVEN')),
     'Dependent workers': ('^2 !1', 'Ask a worker for the uppercase word for the animal that barks. Then ask a second worker to reverse the first worker’s answer and return only the reversed word.', ('DOG', 'GOD'), ('GOD',)),
 }
+ADVANCED = {
+    'Coding · SQLite usage ledger': ('^3 !2',
+        'Implement a single SQLite SELECT query for table usage(event_id TEXT, revision INTEGER, team TEXT, tokens INTEGER). '
+        'For each event keep only the highest revision (event_id and revision are unique together). '
+        'Discard superseded rows even if the latest revision moved teams. Return team, total_tokens and events per team, '
+        'with NULL tokens counted as zero, sorted by total_tokens DESC then team ASC. Ask workers to design and independently review the query with a stronger model if worker model selection is available. '
+        'Return only executable SQL, with no Markdown.', (), ('SQL passes frozen fixtures',)),
+    'Research · Vendor evidence review': ('^3 !2',
+        'Delegate a source-grounded procurement analysis. Select the cheapest eligible vendor at 120,000 monthly units. '
+        'Eligibility: p95 latency at most 150 ms, data retention at most 7 days, and monthly cost at most $135. '
+        'Use only this supplied source packet. [A] Atlas signed price sheet: $90 for 100,000 units plus $2 per started block of 1,000. '
+        '[B] Atlas audit: 142 ms p95; retention 7 days. [C] Birch signed offer: $125 flat and 130 ms p95. '
+        '[D] Birch binding DPA: default retention 30 days; a signed 7-day addendum costs $15/month. '
+        '[E] Cedar website: $105 and 120 ms average. [F] Cedar independent benchmark: 170 ms p95; retention 5 days. '
+        'Check both eligibility and arithmetic. Return JSON only, with keys winner, monthly_usd, atlas_sources (array of supporting source IDs), '
+        'birch_adjusted_usd, and cedar_p95_ms.', (), ('Atlas · $130 · A/B · Birch $140 · Cedar 170 ms',)),
+}
 SCHEMA = '''
 CREATE TABLE IF NOT EXISTS comparisons (
  id TEXT PRIMARY KEY, created_at TEXT NOT NULL, rates_json TEXT NOT NULL
@@ -56,7 +73,9 @@ def aggregate(samples):
     return tuple(sum(column) if None not in column else None for column in zip(*samples))
 
 
-def estimate(values):
+def estimate(values, model=MODEL):
+    if model != MODEL:
+        return None  # No verified reference tariff for Terra or GPT-6.2 Sol.
     return sum(n * rate for n, rate in zip(values[:4], RATES)) / 1_000_000 if None not in values[:4] else None
 
 
@@ -91,13 +110,53 @@ def parse_events(stdout):
             trajectory = re.findall(r'^- ✓ (.+)$', body, re.M)
         values = usage(result.get('usage') or {}, ('inputTokens', 'outputTokens', 'cacheReadTokens', 'cacheWriteTokens', 'totalCost'))
         workers.append((card['id'], source['agentName'], source['taskTitle'], source['prompt'], result.get('status', card['status']),
-                        trajectory[-1] if trajectory else None, card.get('startTime'), card.get('endTime'), MODEL, *values, estimate(values)))
+                        trajectory[-1] if trajectory else None, card.get('startTime'), card.get('endTime'), source.get('workerModel') or MODEL, *values,
+                        estimate(values, source.get('workerModel') or MODEL), source.get('workerEffort') or 'low'))
     return answer, parent, workers
 
 
+def verify_coding(answer):
+    query = (answer or '').strip()
+    if not re.match(r'^(select|with)\b', query, re.I):
+        return False
+    fixtures = [
+        ([('a', 1, 'A', 99), ('a', 2, 'B', 7), ('b', 1, 'A', None), ('c', 1, 'A', 7)], [('A', 7, 2), ('B', 7, 1)]),
+        ([('x', 2, 'old', 22), ('x', 9, 'new', None), ('y', 10, 'old', 10), ('y', 1, 'new', 1), ('z', 1, 'new', 10)], [('new', 10, 2), ('old', 10, 1)]),
+        ([], []),
+    ]
+    for rows, expected in fixtures:
+        with sqlite3.connect(':memory:') as db:
+            db.execute('CREATE TABLE usage(event_id TEXT, revision INTEGER, team TEXT, tokens INTEGER)')
+            db.executemany('INSERT INTO usage VALUES (?,?,?,?)', rows)
+            db.commit()
+            allowed = {sqlite3.SQLITE_SELECT, sqlite3.SQLITE_READ, sqlite3.SQLITE_FUNCTION, sqlite3.SQLITE_RECURSIVE}
+            db.set_authorizer(lambda action, first, second, *_: sqlite3.SQLITE_OK if action in allowed and not
+                              (action == sqlite3.SQLITE_FUNCTION and second in ('load_extension', 'readfile', 'writefile')) else sqlite3.SQLITE_DENY)
+            db.set_progress_handler(lambda: 1, 30_000)
+            try:
+                if db.execute(query).fetchmany(len(expected) + 1) != expected:
+                    return False
+            except sqlite3.Error:
+                return False
+    return True
+
+
+def verify_research(answer):
+    try:
+        result = json.loads(answer or '')
+        return (result['winner'] == 'Atlas' and result['monthly_usd'] == 130 and
+                sorted(result['atlas_sources']) == ['A', 'B'] and result['birch_adjusted_usd'] == 140 and result['cedar_p95_ms'] == 170)
+    except (ValueError, TypeError, KeyError):
+        return False
+
+
 def run(db, comparison, scenario, mode, options):
-    controls, task, expected_workers, expected_answer = CASES[scenario]
-    brief = f'{controls} {task} Use only delegation and response tools. Give the final word(s) only, separated by a space if there are two.'
+    controls, task, expected_workers, expected_answer = (CASES | ADVANCED)[scenario]
+    brief = f'{controls} {task} Use only delegation and response tools.'
+    if scenario in CASES:
+        brief += ' Give the final word(s) only, separated by a space if there are two.'
+    if scenario in ADVANCED and mode == 'fork':
+        brief += ' Select your worker models and effort based on task complexity; consider a stronger worker for independent review.'
     with tempfile.TemporaryDirectory(prefix='dirac-compare-') as workspace:
         common = ['--config', str(options.config), '--cwd', workspace, '--json', '--timeout', '45',
                   '--provider', 'openai-codex', '--model', MODEL, '--reasoning-effort', 'low']
@@ -113,7 +172,8 @@ def run(db, comparison, scenario, mode, options):
             code = 124
         elapsed = time.monotonic() - start
     answer, parent, workers = parse_events(stdout)
-    correct = code == 0 and tuple((answer or '').split()) == expected_answer
+    judge = verify_coding if scenario.startswith('Coding') else verify_research if scenario.startswith('Research') else (lambda value: tuple((value or '').split()) == expected_answer)
+    correct = code == 0 and judge(answer)
     remaining_expected = Counter(expected_workers)
     worker_exact = 0
     for worker in workers:
@@ -127,7 +187,8 @@ def run(db, comparison, scenario, mode, options):
                          VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)''',
                          (comparison, scenario, mode, MODEL, 'openai-codex', 'low', brief, ' '.join(expected_answer), answer,
                           correct, worker_exact, code, elapsed, ledger, *parent, estimate(parent)))
-        db.executemany('INSERT INTO workers VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)', [(cur.lastrowid, *worker) for worker in workers])
+        db.execute('UPDATE runs SET requested=? WHERE id=?', (int(controls.split()[0][1:]), cur.lastrowid))
+        db.executemany('INSERT INTO workers VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)', [(cur.lastrowid, *worker) for worker in workers])
     print(f'{scenario} / {mode}: {elapsed:.2f}s, exit {code}, {len(workers)} worker card(s)', flush=True)
 
 
@@ -155,12 +216,13 @@ def render_run(row, workers):
             offset = 100 * (w['start_ms'] - start) / (end - start)
             width = 100 * (w['end_ms'] - w['start_ms']) / (end - start)
             timeline = f'<div class="timeline" title="Relative to first worker start"><span style="margin-left:{offset:.2f}%;width:{width:.2f}%"></span></div>'
-        branches.append(f'<li><strong>{text(w["name"])} · {text(w["task"])}</strong><small>{text(w["model"])} · {text(w["status"])}</small>'
+        branches.append(f'<li><strong>{text(w["name"])} · {text(w["task"])}</strong><small>{text(w["model"])} / {text(w["worker_effort"])} · {text(w["status"])}</small>'
                         f'{timeline}<p>{text(w["prompt"])}</p><p><b>Result:</b> {text(w["result"])}</p><div class="metrics">{metrics(w)}</div></li>')
-    expected_workers = len(CASES[row['scenario']][2])
+    expected_workers = len((CASES | ADVANCED)[row['scenario']][2])
+    worker_grade = f'{row["exact_workers"]}/{expected_workers} expected worker replies exact' if expected_workers else f'{len(workers)} observed workers'
     return (f'<article class="{row["mode"]}"><h3>{heading}</h3><p>{text(row["provider"])} / {text(row["model"])} / {text(row["effort"])}</p>'
             f'<p><b>{row["elapsed"]:.2f} s</b> · final {"correct" if row["correct"] else "not exact"} · '
-            f'{row["exact_workers"]}/{expected_workers} expected worker replies exact · exit {text(row["exit_code"])}</p>'
+            f'{worker_grade} · exit {text(row["exit_code"])}</p>'
             f'<p><b>Final:</b> {text(row["answer"])} <small>Expected: {text(row["expected"])}</small></p>'
             f'<details><summary>Task brief and parent usage</summary><p>{text(row["brief"])}</p><div class="metrics">{metrics(row)}</div></details>'
             f'<p>{text(row["ledger"]) if row["ledger"] else "No enforced ledger"}</p><h4>Total · parent + workers</h4>'
@@ -168,8 +230,41 @@ def render_run(row, workers):
 
 
 CSS = '''
-:root{color-scheme:light;font:15px/1.45 system-ui;background:#eef2f6;color:#16243b}body{max-width:1280px;margin:0 auto;padding:20px}h1,h2,h3,h4,p{margin:0 0 10px}header{border-bottom:1px solid #ccd8e3;margin-bottom:18px}section{margin:18px 0}.pair{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px}article{background:white;border:1px solid #ccd8e3;border-top:4px solid #586d91;border-radius:10px;padding:14px;overflow-wrap:anywhere}article.fork{border-top-color:#078273}.metrics{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:5px;margin-bottom:10px}.metrics>div{background:#eef3f7;border-radius:5px;padding:5px}.metrics b,small{display:block}small{color:#455976}summary{cursor:pointer}.tree{list-style:none;border-left:2px solid #9cabc1;padding:0 0 0 13px}.tree li{position:relative;margin-bottom:12px;padding:7px;background:#f7f9fb;border-radius:7px}.tree li:before{content:"";position:absolute;left:-13px;top:16px;width:12px;border-top:2px solid #9cabc1}.timeline{background:#e0e8ef;height:6px;margin:6px 0}.timeline span{display:block;background:#087969;height:100%}@media(max-width:730px){.pair{grid-template-columns:1fr}}
+:root{color-scheme:light;font:15px/1.45 system-ui;background:#eef2f6;color:#16243b}body{max-width:1280px;margin:0 auto;padding:20px}h1,h2,h3,h4,p{margin:0 0 10px}header{border-bottom:1px solid #ccd8e3;margin-bottom:18px}section{margin:18px 0}.pair{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px}article{background:white;border:1px solid #ccd8e3;border-top:4px solid #586d91;border-radius:10px;padding:14px;overflow-wrap:anywhere}article.fork{border-top-color:#078273}.metrics{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:5px;margin-bottom:10px}.metrics>div{background:#eef3f7;border-radius:5px;padding:5px}.metrics b,small{display:block}small{color:#455976}summary{cursor:pointer}.tree{list-style:none;border-left:2px solid #9cabc1;padding:0 0 0 13px}.tree li{position:relative;margin-bottom:12px;padding:7px;background:#f7f9fb;border-radius:7px}.tree li:before{content:"";position:absolute;left:-13px;top:16px;width:12px;border-top:2px solid #9cabc1}.timeline{background:#e0e8ef;height:6px;margin:6px 0}.timeline span{display:block;background:#087969;height:100%}@media(max-width:620px){.pair{grid-template-columns:1fr}}
 '''
+
+
+def migrate(db):
+    for table, column, kind in [('runs', 'requested', 'INTEGER'), ('workers', 'worker_effort', 'TEXT')]:
+        if column not in {row[1] for row in db.execute(f'PRAGMA table_info({table})')}:
+            db.execute(f'ALTER TABLE {table} ADD COLUMN {column} {kind}')
+    for scenario, (controls, *_) in (CASES | ADVANCED).items():
+        db.execute('UPDATE runs SET requested=? WHERE requested IS NULL AND scenario=?', (int(controls.split()[0][1:]), scenario))
+    db.execute("UPDATE workers SET worker_effort='low' WHERE worker_effort IS NULL")
+    db.commit()
+
+
+def combined(db):
+    runs = db.execute('SELECT * FROM runs').fetchall()
+    workers = db.execute('SELECT workers.*, runs.mode FROM workers JOIN runs ON runs.id=workers.run_id').fetchall()
+    pairs = {}
+    for row in runs:
+        pairs.setdefault((row['comparison_id'], row['scenario']), {})[row['mode']] = row['correct']
+    blocks = []
+    for mode, name in [('stock', 'Normal Dirac'), ('fork', 'Orchestrator fork')]:
+        other = 'fork' if mode == 'stock' else 'stock'
+        scores = [p[mode] - p[other] for p in pairs.values() if len(p) == 2]
+        rs = [row for row in runs if row['mode'] == mode]
+        ws = [row for row in workers if row['mode'] == mode]
+        keys = ('input', 'output', 'cache_read', 'cache_write', 'reported_cost', 'estimated_cost')
+        vals = dict(zip(keys, aggregate([tuple(row[k] for k in keys) for row in rs + ws]), strict=True)) if rs else dict.fromkeys(keys)
+        cost_rows = [row['estimated_cost'] for row in rs + ws if row['estimated_cost'] is not None]
+        subtotal = f'<p>Priced subtotal: ${sum(cost_rows):.6f} ({len(cost_rows)}/{len(rs)+len(ws)} parent/worker records); full estimate unavailable.</p>' if cost_rows and vals['estimated_cost'] is None else ''
+        requested = sum(row['requested'] or 0 for row in rs)
+        blocks.append(f'<article class="{mode}"><h3>{name}</h3><p><strong>{scores.count(1)} wins · {scores.count(-1)} losses · {scores.count(0)} ties</strong></p>'
+                      f'<p>{sum(r["correct"] for r in rs)}/{len(rs)} correct · {sum(r["elapsed"] for r in rs):.2f} s · {len(ws)}/{requested} workers observed / requested cap</p>'
+                      f'<p>Actual billed spend: unavailable</p><div class="metrics">{metrics(vals)}</div>{subtotal}</article>')
+    return '<h2>Combined results</h2><p>A win means only that mode passed the task judge. Both pass or both fail = tie. Worker count is observed cards; requested is the sum of task launch caps.</p><div class="pair">' + ''.join(blocks) + '</div>'
 
 
 def render(db, output):
@@ -177,7 +272,7 @@ def render(db, output):
     sections = []
     for comparison in comparisons:
         sections.append(f'<h2>{text(comparison["created_at"])}</h2>')
-        for scenario in CASES:
+        for scenario in CASES | ADVANCED:
             rows = db.execute('SELECT * FROM runs WHERE comparison_id=? AND scenario=? ORDER BY CASE mode WHEN \'stock\' THEN 0 ELSE 1 END',
                               (comparison['id'], scenario)).fetchall()
             if not rows:
@@ -192,7 +287,7 @@ def render(db, output):
             '<p>Normal Dirac on the left; orchestrator fork on the right. Worker bars show relative start and end times, not dependencies.</p>'
             '<p>Exact replies count punctuation. Dirac’s reported $0 on Codex does not establish subscription cost. Estimates use the '
             'OpenAI Native Luna standard ≤272k reference rates: $0.10 input, $0.50 output, $0.01 cache read, $0.125 cache write per million. '
-            'Estimates are not billed amounts. — means unavailable.</p></header>' + ''.join(sections) + '</body></html>')
+            'Estimates are not billed amounts. No reference tariff is available for Terra or GPT-6.2 Sol. — means unavailable.</p></header>' + combined(db) + ''.join(sections) + '</body></html>')
     output.write_text(html, encoding='utf-8')
 
 
@@ -203,6 +298,7 @@ def main():
     parser.add_argument('--node', default='node', help='Node executable for the fork')
     parser.add_argument('--db', type=Path, required=True)
     parser.add_argument('--html', type=Path, required=True)
+    parser.add_argument('--suite', choices=('basic', 'advanced', 'all'), default='all')
     parser.add_argument('--render-only', action='store_true')
     options = parser.parse_args()
     if not options.render_only and not options.config:
@@ -213,11 +309,12 @@ def main():
         db.row_factory = sqlite3.Row
         db.execute('PRAGMA foreign_keys=ON')
         db.executescript(SCHEMA)
+        migrate(db)
         if not options.render_only:
             comparison = str(uuid4())
             with db:
                 db.execute('INSERT INTO comparisons VALUES (?,?,?)', (comparison, datetime.now(timezone.utc).isoformat(timespec='seconds'), json.dumps(RATES)))
-            for index, scenario in enumerate(CASES):
+            for index, scenario in enumerate({'basic': CASES, 'advanced': ADVANCED, 'all': CASES | ADVANCED}[options.suite]):
                 for mode in (('stock', 'fork') if index % 2 == 0 else ('fork', 'stock')):
                     run(db, comparison, scenario, mode, options)
                 render(db, options.html)

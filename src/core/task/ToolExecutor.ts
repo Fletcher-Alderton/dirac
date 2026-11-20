@@ -254,6 +254,7 @@ export class ToolExecutor {
 
 	private createSubagentRuntime(options: {
 		modelId?: string
+		workerEffort?: import("@shared/storage/types").OpenaiReasoningEffort
 		utilityModelSelection?: ModelProviderSelection
 	}): SubagentRuntime {
 		const requestRuntime = this.requestRuntime()
@@ -272,6 +273,10 @@ export class ToolExecutor {
 			const modelId = options.modelId?.trim()
 			if (modelId && providerId !== "unknown") {
 				; (candidate as Record<string, unknown>)[getProviderModelIdKey(providerId as ApiProvider, mode)] = modelId
+			}
+			if (options.workerEffort) {
+				if (mode === "act") candidate.actModeReasoningEffort = options.workerEffort
+				else candidate.planModeReasoningEffort = options.workerEffort
 			}
 			handler = buildApiHandler(candidate, mode)
 		}

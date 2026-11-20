@@ -11,6 +11,8 @@ export type AgentConfig = Partial<AgentBaseConfig>
 
 export interface SubagentBuilderOptions {
 	allowedTools?: string[]
+	workerModel?: string
+	workerEffort?: import("@shared/storage/types").OpenaiReasoningEffort
 	systemSuffix?: string
 	agentIdentity?: SubagentIdentity
 	recorder?: SubagentRunRecorder
@@ -54,7 +56,8 @@ export class SubagentBuilder {
 		this.allowedTools = this.resolveAllowedTools(this.agentConfig.tools)
 
 		const runtime = this.baseConfig.callbacks.createSubagentRuntime({
-			modelId: this.agentConfig.modelId,
+			modelId: this.options.workerModel ?? this.agentConfig.modelId,
+			...(this.options.workerEffort ? { workerEffort: this.options.workerEffort } : {}),
 			utilityModelSelection: this.options.utilityModelSelection,
 		})
 		this.providerId = runtime.providerId

@@ -25,6 +25,19 @@ class BenchmarkTest(unittest.TestCase):
         self.assertAlmostEqual(benchmark.estimate(parent), 0.00000203)
         self.assertIsNone(benchmark.estimate((10, 2, None, 0, 0)))
 
+    def test_advanced_judges(self):
+        good = """WITH ranked AS (
+          SELECT *, ROW_NUMBER() OVER (PARTITION BY event_id ORDER BY revision DESC) AS rank FROM usage
+        ) SELECT team, SUM(COALESCE(tokens, 0)), COUNT(*) FROM ranked WHERE rank=1
+          GROUP BY team ORDER BY 2 DESC, 1 ASC"""
+        self.assertTrue(benchmark.verify_coding(good))
+        self.assertFalse(benchmark.verify_coding('SELECT team, SUM(tokens), COUNT(*) FROM usage GROUP BY team'))
+        self.assertFalse(benchmark.verify_coding('SELECT load_extension("bad")'))
+        self.assertTrue(benchmark.verify_research(json.dumps(dict(winner='Atlas', monthly_usd=130,
+                            atlas_sources=['B', 'A'], birch_adjusted_usd=140, cedar_p95_ms=170))))
+        self.assertFalse(benchmark.verify_research('{"winner":"Birch"}'))
+        self.assertIsNone(benchmark.estimate((10, 2, 3, 0, 0), 'gpt-6.2-sol'))
+
     def test_dashboard_escapes_stored_content(self):
         with sqlite3.connect(':memory:') as db, tempfile.TemporaryDirectory() as directory:
             db.row_factory = sqlite3.Row

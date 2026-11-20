@@ -31,13 +31,15 @@ export function buildOrchestrationTrait(config: TaskConfig): IOrchestrationTrait
 				timeoutSeconds: options?.timeout ?? 600,
 				includeHistory: options?.includeHistory === true,
 				providerId,
-				modelId: utilityModelSelection?.modelId ?? config.model.id,
+				modelId: utilityModelSelection?.modelId ?? options?.workerModel ?? config.model.id,
 			})
 		} catch (error) {
 			Logger.error("[OrchestrationTraitBuilder] failed to initialize subagent recorder", error)
 		}
 		const runner = new SubagentRunner(config, options?.subagentName, {
 			allowedTools: options?.allowedTools,
+			workerModel: options?.workerModel,
+			workerEffort: options?.workerEffort,
 			utilityModelSelection,
 			systemSuffix: options?.systemSuffix,
 			agentIdentity,
@@ -75,7 +77,7 @@ export function buildOrchestrationTrait(config: TaskConfig): IOrchestrationTrait
 	return {
 		runSubagent: (prompt, options) => {
 			const session = getOrchestratorSession()
-			if (!session) return runSubagent(prompt, options)
+			if (!session) return runSubagent(prompt, { ...options, workerModel: undefined, workerEffort: undefined })
 			if (config.isSubagentExecution) throw new Error("Nested orchestration is blocked.")
 			return session.launch(options?.signal ?? config.taskState.abortSignal, () =>
 				runSubagent(prompt, {

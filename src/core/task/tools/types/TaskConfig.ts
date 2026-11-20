@@ -183,7 +183,7 @@ export interface TaskCallbacks {
 	/** Build a Utility runner without exposing the credential-bearing API configuration to tools. */
 	createUtilityModelRunner: (selection: ModelProviderSelection, options?: BuildUtilityModelRunnerOptions) => UtilityModelRunner
 	/** Build a subagent handler inside the trusted Task runtime. */
-	createSubagentRuntime: (options: { modelId?: string; utilityModelSelection?: ModelProviderSelection }) => SubagentRuntime
+	createSubagentRuntime: (options: { modelId?: string; workerEffort?: import("@shared/storage/types").OpenaiReasoningEffort; utilityModelSelection?: ModelProviderSelection }) => SubagentRuntime
 }
 
 /**

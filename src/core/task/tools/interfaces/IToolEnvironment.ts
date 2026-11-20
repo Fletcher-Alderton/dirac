@@ -256,6 +256,8 @@ export interface IOrchestrationTrait {
 			timeout?: number
 			includeHistory?: boolean
 			useUtilityModel?: boolean
+			workerModel?: string
+			workerEffort?: import("@shared/storage/types").OpenaiReasoningEffort
 			allowedTools?: string[]
 			systemSuffix?: string
 			onUpdate?: (update: SubagentProgressUpdate) => void | Promise<void>

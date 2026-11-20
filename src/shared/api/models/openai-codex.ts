@@ -17,6 +17,16 @@ export type OpenAiCodexModelId = keyof typeof openAiCodexModels
 export const openAiCodexDefaultModelId: OpenAiCodexModelId = "gpt-6-astra"
 
 export const openAiCodexModels = {
+	"gpt-6.2-sol": {
+		...MODEL_CAPABILITIES["gpt-6.1-sol"],
+		name: "GPT-6.2 Sol",
+		supportsPromptCache: true,
+		apiFormat: ApiFormat.OPENAI_RESPONSES,
+		supportsPersistedReasoning: true,
+		inputPrice: 0,
+		outputPrice: 0,
+		description: "GPT-6.2 Sol via ChatGPT Codex subscription",
+	},
 	"gpt-5.5": {
 		...MODEL_CAPABILITIES["gpt-5.5"],
 		contextWindow: 1_050_000,

@@ -1,3 +1,4 @@
+import { ORCHESTRATOR_WORKER_MODELS, selectOrchestratorWorker } from "../../subagent/OrchestratorWorker"
 import { formatResponse } from "@core/formatResponse"
 import { CardStatus, SubagentExecutionStatus, SubagentStatusItem } from "@shared/ExtensionMessage"
 import {
@@ -32,6 +33,8 @@ interface SubagentRequest {
 	timeout: number
 	includeHistory: boolean
 	useUtilityModel: boolean
+	workerModel?: unknown
+	workerEffort?: unknown
 }
 
 type PresentationIssueScope = "aggregate" | "agent"
@@ -66,6 +69,8 @@ export const use_subagents_spec: DiracToolSpec = {
 			items: {
 				type: "object",
 				properties: {
+					model: { type: "string", enum: [...ORCHESTRATOR_WORKER_MODELS], description: "Worker model override for Codex orchestration mode only." },
+					reasoning_effort: { type: "string", enum: ["low", "medium", "high", "xhigh", "max"], description: "Worker reasoning effort in Codex orchestration mode only." },
 					task_title: {
 						type: "string",
 						description: `Task header for user observability. No more than ${SUBAGENT_TASK_TITLE_MAX_WORDS} words or ${SUBAGENT_TASK_TITLE_MAX_CHARS} characters.`,
@@ -117,6 +122,7 @@ export class UseSubagentsTool implements IDiracTool {
 		if (session) {
 			try {
 				session.assertCapacity(requests.length, env.config.taskState.abortSignal)
+				for (const request of requests) selectOrchestratorWorker(env.config.providerId, request.workerModel, request.workerEffort)
 			} catch (error) {
 				return formatResponse.toolError(toError(error).message)
 			}
@@ -352,6 +358,8 @@ export class UseSubagentsTool implements IDiracTool {
 			timeout: resolveSubagentTimeoutSeconds(timeout),
 			includeHistory: args.include_history === true || String(args.include_history) === "true",
 			useUtilityModel: args.use_utility_model === true || String(args.use_utility_model) === "true",
+			workerModel: args.model,
+			workerEffort: args.reasoning_effort,
 		}
 	}
 
@@ -438,6 +446,9 @@ export class UseSubagentsTool implements IDiracTool {
 
 		const execution = requests.map(async (request, index) => {
 			const entry = entries[index]
+			const worker = getOrchestratorSession()
+				? selectOrchestratorWorker(env.config.providerId, request.workerModel, request.workerEffort)
+				: {}
 			const trajectory: SubagentTrajectoryEvent[] = []
 			const issueContext = {
 				scope: "agent" as const,
@@ -481,11 +492,10 @@ export class UseSubagentsTool implements IDiracTool {
 						status: CardStatus.RUNNING,
 						renderType: "markdown",
 						autoScroll: true,
-						rawInput: createSubagentCardInput(
-							{ id: entry.index, name: entry.name },
-							request.prompt,
-							request.taskTitle,
-						),
+						rawInput: {
+							...createSubagentCardInput({ id: entry.index, name: entry.name }, request.prompt, request.taskTitle),
+							...worker,
+						},
 						rawOutput: createSubagentCardOutput(SubagentExecutionStatus.RUNNING, trajectory),
 						body: formatSubagentTrajectory({
 							id: entry.index,
@@ -520,6 +530,7 @@ export class UseSubagentsTool implements IDiracTool {
 					timeout: request.timeout,
 					includeHistory: request.includeHistory,
 					useUtilityModel: request.useUtilityModel,
+					...worker,
 					subagentName,
 					agentIdentity: { id: entry.index, name: entry.name },
 					taskTitle: request.taskTitle,

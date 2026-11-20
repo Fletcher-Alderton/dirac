@@ -10,6 +10,7 @@ import {
 describe("openAiCodexModels", () => {
 	it("includes supported GPT-5 and GPT-6 variants available through ChatGPT Codex auth", () => {
 		Object.keys(openAiCodexModels).should.deepEqual([
+			"gpt-6.2-sol",
 			"gpt-5.5",
 			"gpt-5.4",
 			"gpt-5.4-mini",

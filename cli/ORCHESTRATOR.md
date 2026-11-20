@@ -44,3 +44,7 @@ python3 scripts/orchestration-benchmark.py --config "$HOME/.dirac-codex" \
 ```
 
 Each comparison appends parent and worker records to the database. Open the static HTML file directly; it needs no server. The export refreshes after each scenario pair. Regenerate it without model calls by supplying `--render-only` and the same `--db` and `--html` paths. Records contain the benchmark brief, worker prompts/results, model, timing and token counters. Cost estimates use a reference API tariff, not Codex subscription billing. Keep the database and HTML local if task text is sensitive.
+
+Use `--suite advanced` to run the validated SQL implementation and source-packet research cases without the small word tasks. Combined standings compare correctness only, and incomplete pairs are excluded from wins/losses. Worker utilization compares observed cards to the sum of requested launch ceilings, not an expectation to fill every slot.
+
+The benchmark holds the orchestrator at GPT-6 Luna / low. In Codex orchestration mode the parent can select GPT-6 Luna, GPT-6.1 Terra, or GPT-6.2 Sol and an effort supported by that model for each worker. Tool controls and the text-only worker boundary still apply. Actual Codex spend is unavailable; no Luna tariff is substituted for a stronger model. A partial reference-cost subtotal is labeled with its coverage.
