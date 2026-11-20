@@ -8,6 +8,7 @@ import { IDiracTool } from "./interfaces/IDiracTool"
 import { SurfaceType } from "./interfaces/SurfaceType"
 import { assertValidToolResponse } from "./runtime/assertValidToolResponse"
 import { normalizeOptionalToolParameters } from "./runtime/normalizeOptionalToolParameters"
+import { getOrchestratorSession } from "./subagent/OrchestratorSession"
 import { AgentConfigLoader } from "./subagent/AgentConfigLoader"
 import type { TaskConfig } from "./types/TaskConfig"
 import type { ToolResponse } from "./types/ToolResponse"
@@ -61,6 +62,13 @@ export class ToolExecutorCoordinator {
 	}
 
 	async execute(config: TaskConfig, block: ToolUse): Promise<ToolResponse> {
+		if (
+			getOrchestratorSession() &&
+			block.name !== DiracDefaultTool.RESPOND &&
+			(config.isSubagentExecution || block.name !== DiracDefaultTool.USE_SUBAGENTS)
+		) {
+			return formatResponse.toolError(`Tool '${block.name}' is blocked in orchestration mode.`)
+		}
 		const modularTool = this.modularTools.get(block.name)
 
 		if (!modularTool && AgentConfigLoader.getInstance().isDynamicSubagentTool(block.name)) {

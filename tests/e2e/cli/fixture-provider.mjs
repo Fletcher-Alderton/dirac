@@ -83,7 +83,7 @@ function editFileArguments(completion) {
 
 /** Deterministic tool calls; all UI, provider parsing, task execution and storage remain real. */
 export async function startFixtureProvider(home, scenario = "long-response", workspace, vimMode = false) {
-	if (!["long-response", "long-plan", "markdown-plan", "markdown-response", "create-file", "edit-file"].includes(scenario)) {
+	if (!["long-response", "long-plan", "markdown-plan", "markdown-response", "create-file", "edit-file", "orchestration-cap"].includes(scenario)) {
 		throw new Error(`Unknown fixture: ${scenario}`)
 	}
 	if (scenario === "edit-file") await writeFile(path.join(workspace, EDIT_FILE_PATH), EDIT_FILE_CONTENT)
@@ -105,10 +105,16 @@ export async function startFixtureProvider(home, scenario = "long-response", wor
 			const createFile = scenario === "create-file" && requests === 0
 			const readFile = scenario === "edit-file" && requests === 0
 			const editFile = scenario === "edit-file" && requests === 1
-			const toolName = createFile ? "write_to_file" : readFile ? "read_file" : editFile ? "edit_file" : "respond"
+			const delegate = scenario === "orchestration-cap" && requests === 0
+			const toolName = delegate ? "use_subagents" : createFile ? "write_to_file" : readFile ? "read_file" : editFile ? "edit_file" : "respond"
 			const tool = completion.tools?.find((candidate) => candidate.function?.name === toolName)
 			if (!tool) throw new Error(`Fixture requires the native ${toolName} tool`)
-			const args = createFile
+			const args = delegate
+				? { subagents: [
+					{ task_title: "First check", prompt: "Return alpha.", include_history: false },
+					{ task_title: "Second check", prompt: "Return beta.", include_history: false },
+				] }
+				: createFile
 				? { path: CREATE_FILE_PATH, content: CREATE_FILE_CONTENT }
 				: readFile
 					? { paths: [EDIT_FILE_PATH], include_anchors: true }
@@ -123,7 +129,9 @@ export async function startFixtureProvider(home, scenario = "long-response", wor
 											? MARKDOWN_PLAN
 											: scenario === "long-plan"
 												? LONG_PLAN
-												: scenario === "edit-file"
+												: scenario === "orchestration-cap"
+										? "Orchestration fixture completed."
+									: scenario === "edit-file"
 													? "File edit fixture completed."
 													: scenario === "create-file"
 														? "File creation fixture completed."

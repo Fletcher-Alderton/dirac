@@ -106,6 +106,23 @@ program
 	})
 
 program
+	.command("orchestrate")
+	.description("Run a read-only orchestration session with enforced subagent limits")
+	.argument("<brief>", "Brief with optional leading ^N %P !X controls")
+	.option("--approve", "Explicitly approve the displayed launch budget without a prompt")
+	.option("-c, --cwd <path>", "Working directory")
+	.option("--config <path>", "Configuration directory")
+	.option("--provider <provider>", "Inference provider (default: openai-codex)")
+	.option("-m, --model <model>", "Orchestrator model (default: gpt-6-luna)")
+	.option("--reasoning-effort <effort>", "Reasoning effort (default: low)", parseReasoningEffort)
+	.option("-t, --timeout <seconds>", "Stop the parent task after a deadline", parseTimeoutSeconds)
+	.option("--json", "Emit task events as JSON instead of opening the TUI")
+	.action(async (brief, options) => {
+		const { runOrchestrator } = await import("./commands/orchestrate")
+		return runOrchestrator(brief, options)
+	})
+
+program
 	.command("history")
 	.alias("h")
 	.description("List task history")

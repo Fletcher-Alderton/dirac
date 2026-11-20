@@ -4,6 +4,7 @@ import type { InferenceSpeed, OpenaiReasoningEffort } from "@/shared/storage/typ
 import type { Controller } from "@/core/controller"
 import type { TaskOptions } from "../types"
 import { applyToolSelectionOptions } from "./tool-options"
+import { getOrchestratorSession } from "@core/task/tools/subagent/OrchestratorSession"
 
 export async function setModeScopedState(currentMode: "act" | "plan", setter: (mode: "act" | "plan") => void): Promise<void> {
 	const { StateManager } = await import("@/core/storage/StateManager")
@@ -65,7 +66,15 @@ export async function applyTaskOptions(options: TaskOptions, workspaceRoot: stri
 	const stateManager = StateManager.get()
 
 	try {
-		const toolSelectionPolicy = await applyToolSelectionOptions(options, workspaceRoot)
+		const orchestrator = getOrchestratorSession()
+		if (orchestrator) {
+			stateManager.setSessionOverride("hooksEnabled", false)
+			stateManager.setSessionOverride("enableCheckpointsSetting", false)
+			stateManager.setSessionOverride("doubleCheckCompletionEnabled", false)
+		}
+		const toolSelectionPolicy = orchestrator
+			? { mode: "exact" as const, toolIds: ["respond"] }
+			: await applyToolSelectionOptions(options, workspaceRoot)
 		if (toolSelectionPolicy) controller.setTaskInitializationDefaults({ toolSelectionPolicy })
 	} catch (error) {
 		printError(`Error: ${error instanceof Error ? error.message : String(error)}`)

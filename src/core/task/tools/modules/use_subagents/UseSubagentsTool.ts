@@ -20,6 +20,7 @@ import { DiracDefaultTool, DiracToolSpec } from "@/shared/tools"
 import { stripHashes } from "../../../../../shared/utils/line-hashing"
 import { IDiracTool } from "../../interfaces/IDiracTool"
 import { ICardHandle, IToolEnvironment } from "../../interfaces/IToolEnvironment"
+import { getOrchestratorSession } from "../../subagent/OrchestratorSession"
 import { AgentConfigLoader } from "../../subagent/AgentConfigLoader"
 import { waitForPresentationOperation } from "../../subagent/PresentationDeadline"
 import { LatestPresentationQueue } from "../../subagent/LatestPresentationQueue"
@@ -112,6 +113,14 @@ export class UseSubagentsTool implements IDiracTool {
 			return formatResponse.toolError(`Missing required parameter: ${subagentName ? "prompt" : "subagents"}`)
 		}
 
+		const session = getOrchestratorSession()
+		if (session) {
+			try {
+				session.assertCapacity(requests.length, env.config.taskState.abortSignal)
+			} catch (error) {
+				return formatResponse.toolError(toError(error).message)
+			}
+		}
 		const entries = this.initializeEntries(requests, env.orchestration.getHistory())
 		const presentationIssues: SubagentPresentationIssue[] = []
 		let cardsCreated = 0
@@ -278,7 +287,11 @@ export class UseSubagentsTool implements IDiracTool {
 			subagentPresentationTimeoutCount: presentationIssues.filter((issue) => issue.timedOut).length,
 		})
 
-		return formatResponse.toolResult(this.formatFinalResponse(entries))
+		const summary = session?.snapshot()
+		return formatResponse.toolResult(
+			this.formatFinalResponse(entries) +
+				(summary ? `\nOrchestrator ledger: ${summary.launched} launched, ${summary.remaining} remaining.` : ""),
+		)
 	}
 
 	private validateExecution(env: IToolEnvironment): void {
