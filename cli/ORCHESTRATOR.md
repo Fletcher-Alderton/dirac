@@ -33,3 +33,14 @@ DIRAC_STOCK_BIN=/path/to/installed/dirac node --test tests/e2e/cli/orchestration
 Without `DIRAC_STOCK_BIN`, the comparison uses the normal `task` command from the same build. The scripted provider sends both modes the same two-child batch under a one-launch brief. Installed Dirac 0.5.24 launched both children (four model requests). Orchestration mode rejected the batch and launched neither (two model requests). A two-launch budget allowed both; no approval produced zero requests. The PTY test exercises the interactive approval and completion path.
 
 In one live Luna/low smoke comparison, both modes delegated once and returned `ALPHA` to the user. Dirac reported 5,244 input tokens and 112 output tokens across the parent and child in orchestration mode, versus 9,276 input and 99 output tokens in stock, with stock additionally reporting 4,480 cache-read tokens. The event spans were about 7.3 and 7.8 seconds. This is one run per mode, not evidence of a general speedup or billing savings.
+
+## SQLite benchmark dashboard
+
+After building, run the matched comparison with Python 3.10+:
+
+```sh
+python3 scripts/orchestration-benchmark.py --config "$HOME/.dirac-codex" \
+  --stock "$HOME/bin/dirac" --db orchestration.sqlite --html orchestration.html
+```
+
+Each comparison appends parent and worker records to the database. Open the static HTML file directly; it needs no server. The export refreshes after each scenario pair. Regenerate it without model calls by supplying `--render-only` and the same `--db` and `--html` paths. Records contain the benchmark brief, worker prompts/results, model, timing and token counters. Cost estimates use a reference API tariff, not Codex subscription billing. Keep the database and HTML local if task text is sensitive.
